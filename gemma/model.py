@@ -179,6 +179,35 @@ class RMSNorm(torch.nn.Module):
         return output
 
 
+class GemmaMoeLayer(nn.Module):
+    def __init__(self, 
+                 experts: List[nn.Module],
+                 gate: nn.Module, 
+                 num_experts_per_tok: int):
+        super().__init__()
+        assert len(experts) > 0
+        self.experts = nn.ModuleList(experts)
+        self.gate = gate
+
+    def forward(self, inputs: torch.Tensor):
+        inputs_squashed = inputs.view(-1, inputs.shape[-1])
+        gate_logits = self.gate(inputs_squashed)
+        weights, selected_experts = torch.topk(
+            gate_logits, num_experts_per_tok
+        )
+        weights = nn.functional.softmax(
+            weights,
+            dim=1,
+            dtype=torch.float,
+        ).type_as(inputs)
+        results = torch.zeros_like(inputs_squashed)
+        for i, expert in enumerate(self.experts):
+            batch_idx, nth_expert = torch.where(selected_experts == i)
+            results[batch_idx] += weights[batch_idx, nth_expert, None] * expert(
+                inputs_squashed[batch_idx]
+            )
+        return results.view_as(inputs)
+
 class GemmaMLP(nn.Module):
 
     def __init__(
@@ -311,10 +340,14 @@ class GemmaDecoderLayer(nn.Module):
             head_dim=config.head_dim,
             quant=config.quant,
         )
-        self.mlp = GemmaMLP(
-            hidden_size=config.hidden_size,
-            intermediate_size=config.intermediate_size,
-            quant=config.quant,
+        self.mlp = GemmaMoeLayer(
+            experts=[GemmaMLP(
+                hidden_size=config.hidden_size,
+                intermediate_size=config.intermediate_size,
+                quant=config.quant
+            ) for _ in range(config.num_experts)],
+            gate = nn.Linear(config.hidden_size, config.num_experts, bias=False),
+            num_experts_per_tok = config.num_experts_per_tok
         )
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        eps=config.rms_norm_eps)

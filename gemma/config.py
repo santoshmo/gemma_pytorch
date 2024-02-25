@@ -55,7 +55,11 @@ class GemmaConfig:
     quant: bool = False
     # The path to the model tokenizer.
     tokenizer: Optional[str] = 'tokenizer/tokenizer.model'
-
+    # The number of total Gemma models to be used in MoE layer
+    num_experts: int = 8
+    # The number of experts a token will be routed to in the MoE layer
+    num_experts_per_tok = 2 # TODO (santoshmohan): Change? 
+    
     def get_dtype(self) -> Optional[torch.dtype]:
         """Gets the torch dtype from the config dtype string."""
         return _STR_DTYPE_TO_TORCH_DTYPE.get(self.dtype, None)
